@@ -32,8 +32,7 @@ app = socketio.ASGIApp(sio)
 
 @sio.event
 async def from_neuronavigation(sid, msg):
-    await sio.emit("to_neuronavigation", msg) 
-    await sio.emit("to_simnibs", msg) 
+    await sio.emit("to_simnibs", msg)
 
 
 @sio.event
