@@ -1,0 +1,6 @@
+nest-asyncio
+python-socketio[asyncio_client]
+uvicorn
+scipy
+nibabel
+# simnibs must be installed separately from https://simnibs.github.io/simnibs/
