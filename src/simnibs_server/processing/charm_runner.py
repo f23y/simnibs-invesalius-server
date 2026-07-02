@@ -3,6 +3,7 @@
 
 import logging
 import os
+import shutil
 import threading
 from typing import Callable, Optional
 
@@ -14,14 +15,6 @@ DoneCb = Callable[[bool, Optional[str], Optional[str]], None]
 
 class CharmRunner:
     """Runs SimNIBS CHARM segmentation via the Python API in a background thread.
-
-    Parameters
-    ----------
-    subject_dir:
-        Full path to the output m2m directory (e.g. ``/data/m2m_ernie``).
-    mri_files:
-        List of one or two MRI file paths.  The first file is used as T1,
-        the second (optional) as T2.
 
     Callbacks (called from the worker thread):
       progress_cb(message: str, percent: int)
@@ -35,12 +28,14 @@ class CharmRunner:
         self,
         subject_dir: str,
         mri_files: list[str],
-        progress_cb: ProgressCb,
-        done_cb: DoneCb,
+        forcerun: bool = False,
+        force_sform: bool = True,
+        progress_cb: ProgressCb = lambda *_: None,
+        done_cb: DoneCb = lambda *_: None,
     ) -> None:
         self._thread = threading.Thread(
             target=self._run,
-            args=(subject_dir, mri_files, progress_cb, done_cb),
+            args=(subject_dir, mri_files, forcerun, force_sform, progress_cb, done_cb),
             daemon=True,
             name="charm-runner",
         )
@@ -50,6 +45,8 @@ class CharmRunner:
         self,
         subject_dir: str,
         mri_files: list[str],
+        forcerun: bool,
+        force_sform: bool,
         progress_cb: ProgressCb,
         done_cb: DoneCb,
     ) -> None:
@@ -71,6 +68,14 @@ class CharmRunner:
                 done_cb(False, f"MRI file not found: {path}", None)
                 return
 
+        if forcerun and os.path.isdir(subject_dir):
+            log.info("forcerun: removing existing directory %s", subject_dir)
+            try:
+                shutil.rmtree(subject_dir)
+            except Exception as exc:
+                done_cb(False, f"forcerun: could not remove {subject_dir}: {exc}", None)
+                return
+
         os.makedirs(subject_dir, exist_ok=True)
         progress_cb("Starting CHARM segmentation…", 0)
 
@@ -84,7 +89,7 @@ class CharmRunner:
                 segment=True,
                 create_surfaces=True,
                 mesh_image=True,
-                force_sform=True,
+                force_sform=force_sform,
             )
         except Exception as exc:
             done_cb(False, str(exc), None)
