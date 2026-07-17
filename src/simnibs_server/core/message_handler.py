@@ -17,7 +17,6 @@ class MessageHandler:
     def __init__(self, socket_client: "SocketClient", message_emit: "MessageEmit") -> None:
         self._client = socket_client
         self._emit = message_emit
-        self._coil_coord: Optional[list] = None
         self._charm_runner = None
 
     def process_messages(self) -> None:
@@ -41,8 +40,8 @@ class MessageHandler:
                 self._on_cancel_simulation()
 
     def _on_coil_pose(self, data: dict) -> None:
-        self._coil_coord = data.get("coord")
-        log.debug("Coil pose updated: %s", self._coil_coord)
+        # InVesalius owns the coil-pose -> matsimnibs
+        log.debug("Coil pose received from navigation (unused server-side): %s", data.get("coord"))
 
     def _on_run_charm(self, data: dict) -> None:
         from src.simnibs_server.processing.charm_runner import CharmRunner
@@ -50,7 +49,8 @@ class MessageHandler:
         subject_dir = data.get("subject_dir", "")
         mri_files = data.get("mri_files", [])
         forcerun = bool(data.get("forcerun", False))
-        force_sform = bool(data.get("force_sform", True))
+        force_qform = bool(data.get("force_qform", False))
+        force_sform = bool(data.get("force_sform", False))
 
         if not subject_dir or not mri_files:
             self._emit.error("SimNIBS: Run charm — missing subject_dir or mri_files")
@@ -62,6 +62,7 @@ class MessageHandler:
             subject_dir=subject_dir,
             mri_files=mri_files,
             forcerun=forcerun,
+            force_qform=force_qform,
             force_sform=force_sform,
             progress_cb=lambda msg, pct: self._emit.progress(msg, pct),
             done_cb=self._on_charm_done,
@@ -87,7 +88,7 @@ class MessageHandler:
         out_dir = data.get("output_dir", "")
         coil = data.get("coil", "")
         didt = float(data.get("didt", 1_000_000.0))
-        matsimnibs = data.get("matsimnibs") or self._coil_to_matsimnibs()
+        matsimnibs = data.get("matsimnibs")
 
         if not m2m_dir or not out_dir or not coil:
             self._emit.error(
@@ -97,7 +98,8 @@ class MessageHandler:
 
         if matsimnibs is None:
             self._emit.error(
-                "SimNIBS: Run simulation — no coil pose available; send a coil pose first"
+                "SimNIBS: Run simulation — no matsimnibs in request. InVesalius must "
+                "send the coil pose matrix (a coil pose from navigation is required)."
             )
             return
 
@@ -132,17 +134,3 @@ class MessageHandler:
                 self._emit.open_nifti(nifti_path)
                 return
         log.warning("charm done but no tissue NIfTI found in %s", subject_dir)
-
-    def _coil_to_matsimnibs(self) -> Optional[list]:
-        """Convert stored [x, y, z, rx, ry, rz] (degrees) to a 4×4 matrix."""
-        if self._coil_coord is None:
-            return None
-        import numpy as np
-        from scipy.spatial.transform import Rotation
-
-        x, y, z, rx, ry, rz = self._coil_coord
-        R = Rotation.from_euler("xyz", [rx, ry, rz], degrees=True).as_matrix()
-        mat = np.eye(4)
-        mat[:3, :3] = R
-        mat[:3, 3] = [x, y, z]
-        return mat.tolist()
