@@ -29,13 +29,14 @@ class CharmRunner:
         subject_dir: str,
         mri_files: list[str],
         forcerun: bool = False,
-        force_sform: bool = True,
+        force_qform: bool = False,
+        force_sform: bool = False,
         progress_cb: ProgressCb = lambda *_: None,
         done_cb: DoneCb = lambda *_: None,
     ) -> None:
         self._thread = threading.Thread(
             target=self._run,
-            args=(subject_dir, mri_files, forcerun, force_sform, progress_cb, done_cb),
+            args=(subject_dir, mri_files, forcerun, force_qform, force_sform, progress_cb, done_cb),
             daemon=True,
             name="charm-runner",
         )
@@ -46,6 +47,7 @@ class CharmRunner:
         subject_dir: str,
         mri_files: list[str],
         forcerun: bool,
+        force_qform: bool,
         force_sform: bool,
         progress_cb: ProgressCb,
         done_cb: DoneCb,
@@ -89,6 +91,7 @@ class CharmRunner:
                 segment=True,
                 create_surfaces=True,
                 mesh_image=True,
+                force_qform=force_qform,
                 force_sform=force_sform,
             )
         except Exception as exc:
