@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Convert a SimNIBS TMS result ``.msh`` into a VTK surface that InVesalius can
-render directly.
-
-InVesalius has neither ``simnibs`` nor ``meshio`` available, so it cannot read
-the raw gmsh mesh. This runs on the server side (which does have ``simnibs``):
-it extracts the gray-matter surface and writes it as a legacy ASCII VTK
-PolyData file whose points carry the E-field magnitude as a scalar array named
-``magnE`` (or ``magnJ``). The file is written by hand so this module needs only
-``simnibs`` + ``numpy`` — no VTK dependency on the server.
+Convert a SimNIBS TMS result ``.msh`` into a VTK surface that InVesalius can render directly.
 """
 
 import logging
@@ -19,7 +11,6 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-# Scalar node/element fields to use directly, in order of preference.
 _SCALAR_CANDIDATES = ("magnE", "normE", "magnJ")
 # Vector fields to take the magnitude of when no scalar field is present.
 _VECTOR_CANDIDATES = ("E", "J")
@@ -34,11 +25,14 @@ def convert(result_msh: str, out_path: str | None = None, surface_tag: int = GM_
 
     mesh = mesh_io.read_msh(result_msh)
     field_name, node_values = _node_field(mesh)
-    coords, tris, values = _extract_surface(mesh, node_values, surface_tag)
+    vector_name, node_vectors = _node_vector_field(mesh)
+    coords, tris, values, vectors = _extract_surface(
+        mesh, node_values, node_vectors, surface_tag
+    )
 
     if out_path is None:
         out_path = os.path.splitext(result_msh)[0] + "_efield.vtk"
-    _write_legacy_vtk(out_path, coords, tris, field_name, values)
+    _write_legacy_vtk(out_path, coords, tris, field_name, values, vector_name, vectors)
 
     return out_path, float(values.min()), float(values.max())
 
@@ -84,7 +78,22 @@ def _node_field(mesh):
     )
 
 
-def _extract_surface(mesh, node_values: np.ndarray, surface_tag: int):
+def _node_vector_field(mesh):
+    """Return (name, vectors) with one E-field vector per node, or (None, None)."""
+    for nd in mesh.nodedata:
+        if nd.field_name in _VECTOR_CANDIDATES and _ncomp(nd) == 3:
+            return nd.field_name, np.asarray(nd.value, dtype=float).reshape(-1, 3)
+
+    for ed in mesh.elmdata:
+        if ed.field_name in _VECTOR_CANDIDATES and _ncomp(ed) == 3:
+            nd = ed.as_nodedata()
+            return ed.field_name, np.asarray(nd.value, dtype=float).reshape(-1, 3)
+
+    log.info("no vector field in mesh; the surface will carry magnitudes only")
+    return None, None
+
+
+def _extract_surface(mesh, node_values: np.ndarray, node_vectors, surface_tag: int):
     """Pull the triangle surface for ``surface_tag`` and remap to compact node ids."""
     node_number_list = mesh.elm.node_number_list  # (M, 4), 1-based; tris use first 3, 4th == -1
     elm_type = mesh.elm.elm_type
@@ -102,11 +111,12 @@ def _extract_surface(mesh, node_values: np.ndarray, surface_tag: int):
     used = np.unique(tri_nodes)                      # sorted, 1-based
     coords = np.asarray(mesh.nodes.node_coord, dtype=float)[used - 1]
     values = node_values[used - 1]
+    vectors = node_vectors[used - 1] if node_vectors is not None else None
     tris = np.searchsorted(used, tri_nodes).astype(np.int64)  # 0-based, compact
-    return coords, tris, values
+    return coords, tris, values, vectors
 
 
-def _write_legacy_vtk(path, coords, tris, field_name, values) -> None:
+def _write_legacy_vtk(path, coords, tris, field_name, values, vector_name, vectors) -> None:
     n = coords.shape[0]
     ntri = tris.shape[0]
     connectivity = np.hstack([np.full((ntri, 1), 3, dtype=np.int64), tris])
@@ -123,3 +133,6 @@ def _write_legacy_vtk(path, coords, tris, field_name, values) -> None:
         fh.write(f"SCALARS {field_name} float 1\n")
         fh.write("LOOKUP_TABLE default\n")
         np.savetxt(fh, values.reshape(-1, 1), fmt="%.6g")
+        if vectors is not None:
+            fh.write(f"VECTORS {vector_name} float\n")
+            np.savetxt(fh, vectors, fmt="%.6g")
