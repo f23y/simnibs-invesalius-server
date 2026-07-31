@@ -38,6 +38,10 @@ class MessageHandler:
                 self._on_run_simulation(data)
             case "SimNIBS: Cancel simulation":
                 self._on_cancel_simulation()
+            case "SimNIBS: Convert msh":
+                self._on_convert_msh(data)
+            case _ if topic.startswith("SimNIBS:"):
+                log.warning("Ignoring unknown request %r — is this server up to date?", topic)
 
     def _on_coil_pose(self, data: dict) -> None:
         # InVesalius owns the coil-pose -> matsimnibs
@@ -112,6 +116,40 @@ class MessageHandler:
             daemon=True,
             name="sim-runner",
         ).start()
+
+    def _on_convert_msh(self, data: dict) -> None:
+        """Convert a result .msh that already exists on disk."""
+        result_msh = data.get("result_msh", "")
+        if not result_msh:
+            self._emit.error("SimNIBS: Convert msh — no result_msh in request")
+            return
+        if not os.path.isfile(result_msh):
+            self._emit.error(f"SimNIBS: Convert msh — file not found: {result_msh}")
+            return
+
+        self._emit.progress("Reading result mesh…", 0)
+        threading.Thread(
+            target=self._convert_msh,
+            args=(result_msh,),
+            daemon=True,
+            name="msh-converter",
+        ).start()
+
+    def _convert_msh(self, result_msh: str) -> None:
+        from src.simnibs_server.processing import msh_to_surface
+
+        try:
+            surface_path, vmin, vmax = msh_to_surface.convert(
+                result_msh, progress_cb=lambda msg, pct: self._emit.progress(msg, pct)
+            )
+        except Exception as exc:  # noqa: BLE001 - report back to InVesalius
+            log.exception("Could not convert %s", result_msh)
+            self._emit.error(f"Could not convert {os.path.basename(result_msh)}: {exc}")
+            return
+
+        log.info("E-field surface written: %s (range %.3g..%.3g)", surface_path, vmin, vmax)
+        self._emit.progress("E-field surface ready.", 100)
+        self._emit.simulation_done(surface_path)
 
     def _on_cancel_simulation(self) -> None:
         log.info("Cancel simulation requested")

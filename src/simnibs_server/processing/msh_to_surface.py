@@ -19,19 +19,33 @@ GM_SURFACE_TAG = 1002  # SimNIBS gray-matter surface tag
 _TRIANGLE_TYPE = 2     # gmsh element type for triangles
 
 
-def convert(result_msh: str, out_path: str | None = None, surface_tag: int = GM_SURFACE_TAG):
+def convert(
+    result_msh: str,
+    out_path: str | None = None,
+    surface_tag: int = GM_SURFACE_TAG,
+    progress_cb=None,
+):
     """Convert ``result_msh`` to a VTK surface and return (path, vmin, vmax)."""
     from simnibs import mesh_io
 
+    def report(message, percent):
+        if progress_cb is not None:
+            progress_cb(message, percent)
+
+    size_mb = os.path.getsize(result_msh) / (1024 * 1024)
+    report(f"Reading result mesh ({size_mb:.0f} MB)…", 5)
     mesh = mesh_io.read_msh(result_msh)
+
+    report("Interpolating the E-field onto mesh nodes…", 15)
     field_name, node_values = _node_field(mesh)
     vector_name, node_vectors = _node_vector_field(mesh)
-    coords, tris, values, vectors = _extract_surface(
-        mesh, node_values, node_vectors, surface_tag
-    )
+
+    report("Extracting the gray-matter surface…", 95)
+    coords, tris, values, vectors = _extract_surface(mesh, node_values, node_vectors, surface_tag)
 
     if out_path is None:
         out_path = os.path.splitext(result_msh)[0] + "_efield.vtk"
+    report(f"Writing {coords.shape[0]} points…", 97)
     _write_legacy_vtk(out_path, coords, tris, field_name, values, vector_name, vectors)
 
     return out_path, float(values.min()), float(values.max())
